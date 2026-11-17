@@ -41,6 +41,16 @@ type MediaState struct {
 	Doc       *tg.Document
 }
 
+func getUserID(msg *tg.Message) int64 {
+	if from, ok := msg.FromID.(*tg.PeerUser); ok {
+		return from.UserID
+	}
+	if peer, ok := msg.PeerID.(*tg.PeerUser); ok {
+		return peer.UserID
+	}
+	return 0
+}
+
 func NewBot(cfg *config.Config, store storage.Storage, pool *worker.Pool) (*MTProtoBot, error) {
 	dispatcher := tg.NewUpdateDispatcher()
 
@@ -103,7 +113,7 @@ func (b *MTProtoBot) handleNewChannelMessage(ctx context.Context, e tg.Entities,
 	if !ok || msg.Out {
 		return nil
 	}
-	return b.processMessage(ctx, msg)
+	return b.processMessage(ctx, e, update, msg)
 }
 
 func (b *MTProtoBot) handleNewMessage(ctx context.Context, e tg.Entities, update *tg.UpdateNewMessage) error {
@@ -111,33 +121,35 @@ func (b *MTProtoBot) handleNewMessage(ctx context.Context, e tg.Entities, update
 	if !ok || msg.Out {
 		return nil
 	}
-	return b.processMessage(ctx, msg)
+	return b.processMessage(ctx, e, update, msg)
 }
 
-func (b *MTProtoBot) processMessage(ctx context.Context, msg *tg.Message) error {
-	senderUser, ok := msg.FromID.(*tg.PeerUser)
-	if !ok {
+func (b *MTProtoBot) processMessage(ctx context.Context, e tg.Entities, upd message.AnswerableMessageUpdate, msg *tg.Message) error {
+	userID := getUserID(msg)
+	if userID == 0 {
 		return nil
 	}
-	userID := senderUser.UserID
-	peer := &tg.InputPeerUser{UserID: userID}
 
 	text := strings.TrimSpace(msg.Message)
+	log.Printf("📩 Received message from user %d: %q", userID, text)
 
 	// Command routing
 	if strings.HasPrefix(text, "/start") {
 		_, _ = b.store.GetOrCreateUser(userID)
-		_, err := b.sender.To(peer).Text(ctx, "👋 Hello! Send me any direct video link or video file up to 2GB to generate screenshots!")
+		_, err := b.sender.Answer(e, upd).Text(ctx, "👋 Hello! Send me any direct video link or video file up to 2GB to generate screenshots!")
+		if err != nil {
+			log.Printf("Error sending /start reply: %v", err)
+		}
 		return err
 	}
 
 	if strings.HasPrefix(text, "/status") {
 		if !b.cfg.IsAdmin(userID) {
-			_, err := b.sender.To(peer).Text(ctx, "⛔ Admin only.")
+			_, err := b.sender.Answer(e, upd).Text(ctx, "⛔ Admin only.")
 			return err
 		}
 		totalUsers, _ := b.store.TotalUsersCount()
-		_, err := b.sender.To(peer).Text(ctx, fmt.Sprintf("📊 Total Users: %d\n⚡ Active Tasks: %d/%d", totalUsers, b.pool.ActiveWorkers(), b.cfg.MaxWorkers))
+		_, err := b.sender.Answer(e, upd).Text(ctx, fmt.Sprintf("📊 Total Users: %d\n⚡ Active Tasks: %d/%d", totalUsers, b.pool.ActiveWorkers(), b.cfg.MaxWorkers))
 		return err
 	}
 
@@ -146,7 +158,7 @@ func (b *MTProtoBot) processMessage(ctx context.Context, msg *tg.Message) error 
 		if docMedia, ok := msg.Media.(*tg.MessageMediaDocument); ok {
 			if doc, ok := docMedia.Document.(*tg.Document); ok && (strings.HasPrefix(doc.MimeType, "video") || doc.MimeType == "application/octet-stream") {
 				streamURL := b.streamer.RegisterDocument(doc)
-				return b.probeAndPresent(ctx, peer, userID, streamURL, doc)
+				return b.probeAndPresent(ctx, e, upd, userID, streamURL, doc)
 			}
 		}
 	}
@@ -154,20 +166,22 @@ func (b *MTProtoBot) processMessage(ctx context.Context, msg *tg.Message) error 
 	// URL inspection
 	if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") {
 		if _, err := url.ParseRequestURI(text); err == nil {
-			return b.probeAndPresent(ctx, peer, userID, text, nil)
+			return b.probeAndPresent(ctx, e, upd, userID, text, nil)
 		}
 	}
 
 	return nil
 }
 
-func (b *MTProtoBot) probeAndPresent(ctx context.Context, peer *tg.InputPeerUser, userID int64, streamURL string, doc *tg.Document) error {
+func (b *MTProtoBot) probeAndPresent(ctx context.Context, e tg.Entities, upd message.AnswerableMessageUpdate, userID int64, streamURL string, doc *tg.Document) error {
+	_, _ = b.sender.Answer(e, upd).Text(ctx, "🔍 Probing video metadata, please wait...")
+
 	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
 	duration, err := ffmpeg.GetDuration(probeCtx, streamURL, b.cfg.IAMHeader)
 	if err != nil {
-		_, _ = b.sender.To(peer).Text(ctx, "😟 Sorry, I could not probe or stream this video file.")
+		_, _ = b.sender.Answer(e, upd).Text(ctx, "😟 Sorry, I could not probe or stream this video file.")
 		return nil
 	}
 
@@ -189,14 +203,25 @@ func (b *MTProtoBot) probeAndPresent(ctx context.Context, peer *tg.InputPeerUser
 	)
 
 	text := fmt.Sprintf("🎬 **Video Detected (MTProto Stream)**\n\n⏱ Duration: `%ds`\n\nSelect number of screenshots to generate:", duration)
-	_, err = b.sender.To(peer).Markup(markup.InlineKeyboard(row1, row2)).Text(ctx, text)
+	_, err = b.sender.Answer(e, upd).Markup(markup.InlineKeyboard(row1, row2)).Text(ctx, text)
 	return err
 }
 
 func (b *MTProtoBot) handleCallbackQuery(ctx context.Context, e tg.Entities, update *tg.UpdateBotCallbackQuery) error {
+	// Acknowledge callback query
+	_, _ = b.client.API().MessagesSetBotCallbackAnswer(ctx, &tg.MessagesSetBotCallbackAnswerRequest{
+		QueryID: update.QueryID,
+	})
+
 	data := string(update.Data)
 	userID := update.UserID
-	peer := &tg.InputPeerUser{UserID: userID}
+
+	uEntity, ok := e.Users[userID]
+	if !ok {
+		log.Printf("User %d not found in entities", userID)
+		return nil
+	}
+	peer := uEntity.AsInputPeer()
 
 	val, ok := b.states.Load(userID)
 	if !ok {
