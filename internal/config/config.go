@@ -8,7 +8,10 @@ import (
 )
 
 type Config struct {
+	APIID               int
+	APIHash             string
 	BotToken            string
+	SessionName         string
 	AuthUsers           []int64
 	LogChannel          int64
 	StreamHost          string
@@ -40,7 +43,10 @@ var (
 
 func Load() *Config {
 	return &Config{
+		APIID:               parseInt(getEnv("API_ID", "0")),
+		APIHash:             getEnv("API_HASH", ""),
 		BotToken:            getEnv("BOT_TOKEN", ""),
+		SessionName:         getEnv("SESSION_NAME", "screenshotbot"),
 		AuthUsers:           parseInt64Slice(getEnv("AUTH_USERS", "")),
 		LogChannel:          parseInt64(getEnv("LOG_CHANNEL", "0")),
 		StreamHost:          getEnv("HOST", ""),

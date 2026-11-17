@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -8,6 +9,7 @@ import (
 
 	"animated-lamp-go/internal/bot"
 	"animated-lamp-go/internal/config"
+	"animated-lamp-go/internal/mtproto"
 	"animated-lamp-go/internal/storage"
 	"animated-lamp-go/internal/worker"
 )
@@ -18,9 +20,6 @@ func main() {
 		log.Fatal("BOT_TOKEN environment variable is required")
 	}
 
-	log.Printf("Starting Screenshot Bot (Workers: %d, MaxUserTasks: %d)...",
-		cfg.MaxWorkers, cfg.MaxProcessesPerUser)
-
 	store, err := storage.NewBoltStorage(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
@@ -28,20 +27,33 @@ func main() {
 
 	pool := worker.NewPool(cfg.MaxWorkers, cfg.MaxProcessesPerUser, cfg.ProcessTimeout)
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// If API_ID and API_HASH are provided, run the native MTProto engine
+	if cfg.APIID != 0 && cfg.APIHash != "" {
+		log.Printf("🚀 Starting in native MTProto mode (API_ID: %d)...", cfg.APIID)
+		mtBot, err := mtproto.NewBot(cfg, store, pool)
+		if err != nil {
+			log.Fatalf("Failed to initialize MTProto bot: %v", err)
+		}
+		if err := mtBot.Start(ctx); err != nil && err != context.Canceled {
+			log.Fatalf("MTProto bot error: %v", err)
+		}
+		return
+	}
+
+	// Otherwise, run in standard Bot API mode
+	log.Println("🤖 Starting in Telegram Bot API mode...")
 	server, err := bot.New(cfg, store, pool)
 	if err != nil {
 		log.Fatalf("Failed to initialize bot: %v", err)
 	}
 
-	// Graceful shutdown handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
 	go func() {
-		<-sigChan
+		<-ctx.Done()
 		log.Println("Shutting down gracefully...")
 		server.Stop()
-		os.Exit(0)
 	}()
 
 	server.Start()
