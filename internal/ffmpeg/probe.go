@@ -37,7 +37,7 @@ type Format struct {
 }
 
 func runFFprobe(ctx context.Context, args []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "ffprobe", args...)
+	cmd := exec.CommandContext(ctx, FFprobeBinary(), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stdout, stderr bytes.Buffer

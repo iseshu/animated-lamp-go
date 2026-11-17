@@ -40,7 +40,7 @@ func GenerateSampleVideo(ctx context.Context, fileURL, iamHeader string, startAt
 		outFile,
 	)
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, FFmpegBinary(), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stderr bytes.Buffer

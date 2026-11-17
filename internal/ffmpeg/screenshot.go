@@ -33,7 +33,7 @@ func ExtractFrameToMemory(ctx context.Context, fileURL, iamHeader string, sec in
 	// Output: JPEG image streamed straight to stdout (pipe:1)
 	args = append(args, "-f", "image2", "-c:v", "mjpeg", "-q:v", "2", "pipe:1")
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, FFmpegBinary(), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stdout, stderr bytes.Buffer
