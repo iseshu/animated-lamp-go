@@ -41,7 +41,34 @@ var (
 	}
 )
 
+func loadEnvFiles(paths ...string) {
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				val := strings.TrimSpace(parts[1])
+				val = strings.Trim(val, `"'`)
+				if os.Getenv(key) == "" {
+					_ = os.Setenv(key, val)
+				}
+			}
+		}
+	}
+}
+
 func Load() *Config {
+	loadEnvFiles(".env", "environment", "../.env")
+
 	return &Config{
 		APIID:               parseInt(getEnv("API_ID", "0")),
 		APIHash:             getEnv("API_HASH", ""),
