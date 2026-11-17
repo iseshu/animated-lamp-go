@@ -1,6 +1,8 @@
 package config
 
 import (
+	"flag"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +41,11 @@ var (
 		"Center Left", "Centered", "Center Right",
 		"Bottom Left", "Bottom Center", "Bottom Right",
 	}
+
+	flagToken     = flag.String("token", "", "Telegram Bot Token")
+	flagAPIID     = flag.Int("api-id", 0, "Telegram API ID")
+	flagAPIHash   = flag.String("api-hash", "", "Telegram API Hash")
+	flagAuthUsers = flag.String("auth-users", "", "Admin IDs separated by space")
 )
 
 func loadEnvFiles(paths ...string) {
@@ -67,14 +74,51 @@ func loadEnvFiles(paths ...string) {
 }
 
 func Load() *Config {
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+
 	loadEnvFiles(".env", "environment", "../.env")
 
+	botToken := *flagToken
+	if botToken == "" {
+		botToken = getEnv("BOT_TOKEN", "")
+	}
+	if botToken == "" && flag.NArg() > 0 {
+		botToken = flag.Arg(0)
+	}
+
+	apiID := *flagAPIID
+	if apiID == 0 {
+		apiID = parseInt(getEnv("API_ID", "0"))
+	}
+
+	apiHash := *flagAPIHash
+	if apiHash == "" {
+		apiHash = getEnv("API_HASH", "")
+	}
+
+	authUsersStr := *flagAuthUsers
+	if authUsersStr == "" {
+		authUsersStr = getEnv("AUTH_USERS", "")
+	}
+
+	if botToken == "" {
+		var envKeys []string
+		for _, e := range os.Environ() {
+			pair := strings.SplitN(e, "=", 2)
+			envKeys = append(envKeys, pair[0])
+		}
+		log.Printf("🔍 Detected environment variables in container: %v", envKeys)
+		log.Println("💡 Tip: You can pass token directly in startup command: ./bot -token=\"YOUR_BOT_TOKEN\" -api-id=YOUR_ID -api-hash=\"YOUR_HASH\"")
+	}
+
 	return &Config{
-		APIID:               parseInt(getEnv("API_ID", "0")),
-		APIHash:             getEnv("API_HASH", ""),
-		BotToken:            getEnv("BOT_TOKEN", ""),
+		APIID:               apiID,
+		APIHash:             apiHash,
+		BotToken:            botToken,
 		SessionName:         getEnv("SESSION_NAME", "screenshotbot"),
-		AuthUsers:           parseInt64Slice(getEnv("AUTH_USERS", "")),
+		AuthUsers:           parseInt64Slice(authUsersStr),
 		LogChannel:          parseInt64(getEnv("LOG_CHANNEL", "0")),
 		StreamHost:          getEnv("HOST", ""),
 		IAMHeader:           getEnv("IAM_HEADER", ""),
